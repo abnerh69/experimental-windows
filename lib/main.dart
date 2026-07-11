@@ -76,17 +76,21 @@ void main() {
 /// navigator interno del diálogo en pleno pop y dispara dos aserciones de
 /// debug NO fatales cada vez que se cierra el diálogo fullscreen. Este
 /// filtro las reduce a una línea de log y deja pasar todo lo demás intacto.
+bool _esAsercionConocida(String texto, String pila) {
+  final bool bloqueoNavigator = texto.contains("'!_debugLocked'") &&
+      pila.contains('_DialogWindowRoute.didPop');
+  final bool elementoDifunto = texto.contains('_ElementLifecycle.defunct') &&
+      pila.contains('NavigatorState._cancelActivePointers');
+  return bloqueoNavigator || elementoDifunto;
+}
+
 void _instalarFiltroDeAsercionesConocidas() {
+  // Canal síncrono: aserciones que el framework reporta vía
+  // FlutterError.reportError (widgets library, gesture arena).
   final FlutterExceptionHandler? previo = FlutterError.onError;
   FlutterError.onError = (FlutterErrorDetails detalles) {
     final String texto = detalles.exceptionAsString();
-    final String pila = detalles.stack?.toString() ?? '';
-    final bool bloqueoNavigator = texto.contains("'!_debugLocked'") &&
-        pila.contains('_DialogWindowRoute.didPop');
-    final bool elementoDifunto =
-        texto.contains('_ElementLifecycle.defunct') &&
-            pila.contains('NavigatorState._cancelActivePointers');
-    if (bloqueoNavigator || elementoDifunto) {
+    if (_esAsercionConocida(texto, detalles.stack?.toString() ?? '')) {
       debugPrint(
         '[windowing_demo] Aserción conocida suprimida al cerrar el '
         'diálogo-ventana (docs/showdialog-macos.md): '
@@ -95,6 +99,24 @@ void _instalarFiltroDeAsercionesConocidas() {
       return;
     }
     previo?.call(detalles);
+  };
+
+  // Canal asíncrono: desde que el pop del diálogo-ventana corre tras un
+  // await (_cerrarDiferido, entrega 011), la aserción "defunct" ya no pasa
+  // por la gesture arena y llega como excepción no manejada del isolate.
+  // Mismas firmas, mismo tratamiento.
+  final dispatcher = WidgetsBinding.instance.platformDispatcher;
+  final previoPlataforma = dispatcher.onError;
+  dispatcher.onError = (Object error, StackTrace pila) {
+    final String texto = error.toString();
+    if (_esAsercionConocida(texto, pila.toString())) {
+      debugPrint(
+        '[windowing_demo] Aserción conocida suprimida (async) al cerrar el '
+        'diálogo-ventana: ${texto.split('\n').first}',
+      );
+      return true;
+    }
+    return previoPlataforma?.call(error, pila) ?? false;
   };
 }
 
