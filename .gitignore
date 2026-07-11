@@ -1,12 +1,46 @@
-# Archivos del sistema
-.DS_Store
-Thumbs.db
+# ── Flutter / Dart / Pub ────────────────────────────────────────────
+**/doc/api/
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+/build/
 
-# Editores
+# Symbolication y ofuscación
+app.*.symbols
+app.*.map.json
+
+# Nota: pubspec.lock y .metadata SÍ se versionan (esto es una aplicación).
+
+# ── fvm ─────────────────────────────────────────────────────────────
+# Se versiona .fvmrc; el enlace al SDK y su caché local, no.
+.fvm/
+
+# ── IDEs ────────────────────────────────────────────────────────────
+# IntelliJ IDEA
+*.iml
+*.ipr
+*.iws
 .idea/
-.vscode/
-*.swp
+# VS Code: descomentar si no se quiere versionar launch/tasks
+#.vscode/
 
-# Archivos temporales
-*.tmp
-temp/
+# ── macOS / Xcode ───────────────────────────────────────────────────
+# (macos/.gitignore generado por flutter create ya cubre ephemeral;
+#  esto refuerza y cubre aperturas directas en Xcode)
+**/Flutter/ephemeral/
+.build/
+.swiftpm/
+xcuserdata/
+DerivedData/
+
+# ── Sistema y misceláneos ───────────────────────────────────────────
+.DS_Store
+*.log
+*.swp
+.atom/
+.buildlog/
+.history
+.svn/
+migrate_working_dir/
