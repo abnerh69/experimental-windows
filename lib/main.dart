@@ -133,7 +133,6 @@ class _PaginaPrincipalState extends State<PaginaPrincipal> {
   _FaseEmergente _faseTooltip = _FaseEmergente.cerrado;
   Completer<void>? _popupDestruido;
   Completer<void>? _tooltipDestruido;
-  bool _dialogoMaterialRenderizado = false;
   int _secuenciaRegulares = 0;
 
   /// Rectángulo global (en coordenadas de esta ventana) del widget con [key].
@@ -380,41 +379,33 @@ class _PaginaPrincipalState extends State<PaginaPrincipal> {
     if (!mounted) {
       return;
     }
-    _dialogoMaterialRenderizado = false;
     final NavigatorState navegador = Navigator.of(context);
-    // Watchdog: en macOS (canal main) la variante sized-to-content de la
-    // ventana-diálogo se crea invisible y bloquea la principal como sheet
-    // fantasma (docs/showdialog-macos.md). Si el contenido no confirma su
-    // primer frame en unos segundos, la ruta se cierra sola.
-    Timer(const Duration(seconds: 6), () {
-      if (_dialogoMaterialRenderizado || !navegador.mounted) {
-        return;
-      }
-      if (navegador.canPop()) {
-        navegador.pop();
-      }
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'La ventana-diálogo de showDialog nunca llegó a mostrarse '
-              '(bug de macOS en el canal main); se canceló automáticamente.',
-            ),
-          ),
-        );
-      }
-    });
-    // Con windowing activo, showDialog crea una ventana nativa hija.
-    // Con fullscreen la rama usa tamaño fijo (el de la principal) y sí
-    // funciona hoy en macOS; sin él usa sized-to-content, que no.
+    // Con windowing activo, showDialog crea una ventana nativa hija. Con
+    // fullscreen usa tamaño fijo (funciona hoy en macOS); sin él usa
+    // sized-to-content, que hoy produce un sheet fantasma que bloquea la
+    // app. Rescate en dos capas (docs/showdialog-macos.md): la sonda de
+    // abajo mide el tamaño real de la ventana anfitriona, y el vigilante
+    // nativo del AppDelegate termina el sheet aunque Dart quede congelado.
     await showDialog<void>(
       context: context,
       fullscreenDialog: fullscreen,
-      builder: (BuildContext context) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          _dialogoMaterialRenderizado = true;
-        });
-        return AlertDialog(
+      builder: (BuildContext context) => _SondaVentanaDialogo(
+        alDetectarFantasma: () {
+          if (navegador.mounted && navegador.canPop()) {
+            navegador.pop();
+          }
+          if (mounted) {
+            ScaffoldMessenger.of(this.context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'showDialog creó un sheet sin tamaño (bug de macOS en el '
+                  'canal main); se canceló automáticamente.',
+                ),
+              ),
+            );
+          }
+        },
+        child: AlertDialog(
           title: const Text('showDialog de Material'),
           content: const Text(
             'Este diálogo usa el showDialog de siempre.\n\n'
@@ -427,8 +418,8 @@ class _PaginaPrincipalState extends State<PaginaPrincipal> {
               child: const Text('Cerrar'),
             ),
           ],
-        );
-      },
+        ),
+      ),
     );
   }
 
@@ -793,4 +784,49 @@ class _ContenidoTooltip extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Sonda dentro del contenido del diálogo: si a los 5 s la ventana que lo
+/// aloja sigue sin tamaño (sheet fantasma de sized-to-content), dispara el
+/// rescate. Si Dart quedó congelado por la sesión modal del sheet, primero
+/// actúa el vigilante nativo del AppDelegate y esta sonda remata la ruta al
+/// reanudarse el isolate.
+class _SondaVentanaDialogo extends StatefulWidget {
+  const _SondaVentanaDialogo({
+    required this.alDetectarFantasma,
+    required this.child,
+  });
+
+  final VoidCallback alDetectarFantasma;
+  final Widget child;
+
+  @override
+  State<_SondaVentanaDialogo> createState() => _SondaVentanaDialogoState();
+}
+
+class _SondaVentanaDialogoState extends State<_SondaVentanaDialogo> {
+  Timer? _vigilante;
+
+  @override
+  void initState() {
+    super.initState();
+    _vigilante = Timer(const Duration(seconds: 5), () {
+      if (!mounted) {
+        return;
+      }
+      final Size? tamano = WindowScope.maybeContentSizeOf(context);
+      if (tamano == null || tamano.isEmpty) {
+        widget.alDetectarFantasma();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _vigilante?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }
