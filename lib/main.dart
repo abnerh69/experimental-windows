@@ -449,9 +449,8 @@ class _PaginaPrincipalState extends State<PaginaPrincipal> {
             'ventana nativa hija en lugar de una ruta superpuesta.',
           ),
           actions: <Widget>[
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Cerrar'),
+            _BotonCerrarTrasAsentar(
+              alCerrar: () => Navigator.of(context).pop(),
             ),
           ],
         ),
@@ -865,4 +864,49 @@ class _SondaVentanaDialogoState extends State<_SondaVentanaDialogo> {
 
   @override
   Widget build(BuildContext context) => widget.child;
+}
+
+/// Botón "Cerrar" que se habilita ~600 ms después de montarse. Al abrirse,
+/// la ventana del diálogo (sheet) programa commits diferidos de
+/// presentación/redimensionado; como `_DialogWindowRoute.didPop` la destruye
+/// de forma síncrona, cerrarla con un commit pendiente dispara la misma
+/// carrera FFI del engine documentada para popups (docs/popups-macos.md).
+/// Este pequeño asentamiento reduce esa ventana de carrera.
+class _BotonCerrarTrasAsentar extends StatefulWidget {
+  const _BotonCerrarTrasAsentar({required this.alCerrar});
+
+  final VoidCallback alCerrar;
+
+  @override
+  State<_BotonCerrarTrasAsentar> createState() =>
+      _BotonCerrarTrasAsentarState();
+}
+
+class _BotonCerrarTrasAsentarState extends State<_BotonCerrarTrasAsentar> {
+  Timer? _temporizador;
+  bool _listo = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _temporizador = Timer(const Duration(milliseconds: 600), () {
+      if (mounted) {
+        setState(() => _listo = true);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _temporizador?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return TextButton(
+      onPressed: _listo ? widget.alCerrar : null,
+      child: const Text('Cerrar'),
+    );
+  }
 }

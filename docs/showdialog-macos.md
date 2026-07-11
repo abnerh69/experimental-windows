@@ -48,6 +48,10 @@ Con `fullscreenDialog: true` el diálogo-ventana **sí se muestra**, pero cada c
 
 Corrección que correspondería upstream: diferir el `destroy()` de `_DialogWindowRoute.didPop` (microtask o post-frame) en lugar de ejecutarlo bajo el lock del Navigator.
 
+Además de las aserciones, ese `destroy()` síncrono puede disparar la carrera FFI fatal documentada en `docs/popups-macos.md` (`Callback invoked after it has been deleted`) si quedan commits diferidos de la animación del sheet: por eso el botón "Cerrar" del diálogo-ventana del demo se habilita ~600 ms después de abrirse.
+
+Nota sobre el vigilante nativo: la línea `Sheet tras 5 s: frame={{...}, {920, 640}} subvistas=2` corresponde al sheet **sano** del fullscreen (920×640 = tamaño de la principal); el vigilante lo respeta porque tiene tamaño y contenido. La línea equivalente del sheet fantasma (sized-to-content) sigue pendiente de capturar; si al pulsar ese botón no aparece línea alguna, significará que el fantasma ni siquiera pasa por `willBeginSheetNotification`, lo que también acota el bug.
+
 Mitigación en el demo: `_instalarFiltroDeAsercionesConocidas()` (activable con la constante `suprimirAsercionesConocidas` en `main.dart`) intercepta `FlutterError.onError` y reduce **solo esas dos firmas exactas** (texto + frame de pila) a una línea de log, delegando todo lo demás al manejador previo. Ponla en `false` para capturar las trazas íntegras al preparar el reporte.
 
 ## Estado upstream

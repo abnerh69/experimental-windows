@@ -29,7 +29,7 @@
 2. **Periodo de asentamiento**: tras crear el popup/tooltip se espera un frame más ~250 ms (`addPostFrameCallback` + `Future.delayed`) antes de pasar a `abierto`, dando tiempo a que el commit de redimensionado inicial termine.
 3. **Destroy único** (`destruirSeguro`): un `Set<BaseWindowController>` garantiza que `destroy()` se invoque a lo sumo una vez por controlador, sin importar desde dónde se cierre (botón de alternado, contenido de la ventana o lista de ventanas). El delegate limpia el set en `onWindowDestroyed`.
 
-Con contenido estático en las emergentes (sin más commits tras el inicial), la ventana de carrera queda reducida al mínimo alcanzable desde el lado de la app. **El bug de fondo es del engine**: puede seguir reproduciéndose, por ejemplo, cerrando la ventana padre con emergentes recién creadas.
+Con contenido estático en las emergentes (sin más commits tras el inicial), la ventana de carrera queda reducida al mínimo alcanzable desde el lado de la app. **El bug de fondo es del engine y afecta a cualquier ventana** destruida con un commit de presentación/redimensionado pendiente, no solo a las emergentes: se observó también al cerrar el diálogo fullscreen de `showDialog`, cuya ventana destruye el framework de forma síncrona en `_DialogWindowRoute.didPop` (la animación del sheet deja commits diferidos). Para ese caso, el botón "Cerrar" del diálogo del demo se habilita ~600 ms después de abrirse (`_BotonCerrarTrasAsentar`). Puede seguir reproduciéndose, por ejemplo, cerrando la ventana padre con emergentes recién creadas.
 
 ## Segundo aborto: enumeración mutada al perder el foco (diálogos/sheets)
 
