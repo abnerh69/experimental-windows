@@ -23,11 +23,19 @@
 - El punto 2 es una **carrera en el embedder de windowing**: las ventanas *sized-to-content* (popups y tooltips) programan un commit de redimensionado diferido (`ResizeSynchronizer.performCommit(afterDelay:)`). Si la ventana se **destruye** con ese commit aún pendiente, el bloque nativo se ejecuta después e invoca vía FFI un callback de Dart (`viewDidUpdateContents`) que ya fue cerrado al destruir el controlador → assert del VM y SIGABRT. Alternar el popup rápido (crear → destruir en <1 s) o destruirlo dos veces lo dispara con facilidad.
 - No encontramos issue upstream con esta traza (el SDK usado se publicó el día anterior); es candidato a reporte en `flutter/flutter` adjuntando el volcado completo y la versión exacta.
 
+## Diagnóstico afinado (entrega 011): es un problema de orden, no de tiempo
+
+El `afterDelay` de los commits se calcula en el engine a partir de tiempos de presentación (`FlutterSurfaceManager`: `delay = max((presentationTime + last)/2 − now, 0)`), es decir, **uno o dos frames**. Los periodos de asentamiento no bastaban porque la carrera no depende de la edad de la ventana: **el propio clic de cierre repinta la ventana** (efecto ink del botón, ~300 ms de animación) **y encola nuevos commits**; el `destroy()` corría síncrono en el mismo turno del gesto y les ganaba. Por eso el aborto se reproducía con cualquier botón de cierre a cualquier edad.
+
+Consecuencia: toda destrucción debe **ceder el run loop** antes de ejecutarse, para que los commits encolados (incluida la animación del ink) drenen.
+
 ## Mitigación aplicada en el demo (lib/main.dart)
 
 1. **Máquina de estados por emergente**: `cerrado → abriendo → abierto → cerrando → cerrado`. Durante `abriendo` y `cerrando` el botón se deshabilita y los clics se ignoran; solo se permite destruir en `abierto`.
 2. **Periodo de asentamiento**: tras crear el popup/tooltip se espera un frame más ~250 ms (`addPostFrameCallback` + `Future.delayed`) antes de pasar a `abierto`, dando tiempo a que el commit de redimensionado inicial termine.
-3. **Destroy único** (`destruirSeguro`): un `Set<BaseWindowController>` garantiza que `destroy()` se invoque a lo sumo una vez por controlador, sin importar desde dónde se cierre (botón de alternado, contenido de la ventana o lista de ventanas). El delegate limpia el set en `onWindowDestroyed`.
+3. **Destroy único y diferido** (`destruirSeguro`): un `Set<BaseWindowController>` garantiza a lo sumo un `destroy()` por controlador, y la destrucción se ejecuta **~400 ms después** de solicitarse (`_demoraDestruccion`), cediendo el run loop para drenar los commits en vuelo. Aplica a todos los caminos de cierre: botones de alternado, contenido de la ventana, lista de ventanas y — vía `onWindowCloseRequested` en los delegates — el botón rojo del semáforo de ventanas regulares y diálogos. El botón del diálogo-ventana de `showDialog` difiere igualmente su `pop` (que destruye síncrono en `didPop`).
+
+**Fuera de alcance**: destrucciones iniciadas por la plataforma (p. ej. el cierre automático de popups al perder el foco la ventana padre) no pasan por `destruirSeguro` y pueden seguir abortando; eso solo se corrige en el engine.
 
 Con contenido estático en las emergentes (sin más commits tras el inicial), la ventana de carrera queda reducida al mínimo alcanzable desde el lado de la app. **El bug de fondo es del engine y afecta a cualquier ventana** destruida con un commit de presentación/redimensionado pendiente, no solo a las emergentes: se observó también al cerrar el diálogo fullscreen de `showDialog`, cuya ventana destruye el framework de forma síncrona en `_DialogWindowRoute.didPop` (la animación del sheet deja commits diferidos). Para ese caso, el botón "Cerrar" del diálogo del demo se habilita ~600 ms después de abrirse (`_BotonCerrarTrasAsentar`). Puede seguir reproduciéndose, por ejemplo, cerrando la ventana padre con emergentes recién creadas.
 

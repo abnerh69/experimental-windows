@@ -23,9 +23,17 @@ final ValueNotifier<int> contadorCompartido = ValueNotifier<int>(0);
 final Set<BaseWindowController> _destruccionSolicitada =
     <BaseWindowController>{};
 
+/// Milisegundos entre solicitar la destrucción y ejecutarla. El clic de
+/// cierre repinta la propia ventana (efecto ink) y encola un commit de
+/// presentación en el run loop; destruir en el mismo turno del gesto le gana
+/// a ese commit y el engine invoca un callback FFI ya cerrado (aborto del
+/// VM). Diferir cede el run loop para que los commits — y la animación del
+/// ink (~300 ms) — terminen antes del destroy.
+const Duration _demoraDestruccion = Duration(milliseconds: 400);
+
 void destruirSeguro(BaseWindowController controlador) {
   if (_destruccionSolicitada.add(controlador)) {
-    controlador.destroy();
+    Future<void>.delayed(_demoraDestruccion, controlador.destroy);
   }
 }
 
@@ -109,6 +117,11 @@ class _AlDestruirRegular with RegularWindowControllerDelegate {
   final VoidCallback alDestruir;
 
   @override
+  void onWindowCloseRequested(RegularWindowController controller) {
+    destruirSeguro(controller); // Diferido; no llamar a super (destruiría ya).
+  }
+
+  @override
   void onWindowDestroyed() {
     alDestruir();
     super.onWindowDestroyed();
@@ -118,6 +131,11 @@ class _AlDestruirRegular with RegularWindowControllerDelegate {
 class _AlDestruirDialogo with DialogWindowControllerDelegate {
   _AlDestruirDialogo(this.alDestruir);
   final VoidCallback alDestruir;
+
+  @override
+  void onWindowCloseRequested(DialogWindowController controller) {
+    destruirSeguro(controller); // Diferido; no llamar a super (destruiría ya).
+  }
 
   @override
   void onWindowDestroyed() {
@@ -885,6 +903,7 @@ class _BotonCerrarTrasAsentar extends StatefulWidget {
 class _BotonCerrarTrasAsentarState extends State<_BotonCerrarTrasAsentar> {
   Timer? _temporizador;
   bool _listo = false;
+  bool _cerrando = false;
 
   @override
   void initState() {
@@ -902,11 +921,22 @@ class _BotonCerrarTrasAsentarState extends State<_BotonCerrarTrasAsentar> {
     super.dispose();
   }
 
+  /// El pop destruye la ventana de forma síncrona (didPop); diferirlo deja
+  /// drenar el commit encolado por el repintado de este mismo clic.
+  Future<void> _cerrarDiferido() async {
+    setState(() => _cerrando = true);
+    await Future<void>.delayed(_demoraDestruccion);
+    if (mounted) {
+      widget.alCerrar();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final bool habilitado = _listo && !_cerrando;
     return TextButton(
-      onPressed: _listo ? widget.alCerrar : null,
-      child: const Text('Cerrar'),
+      onPressed: habilitado ? _cerrarDiferido : null,
+      child: Text(_cerrando ? 'Cerrando…' : 'Cerrar'),
     );
   }
 }
