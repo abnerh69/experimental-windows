@@ -31,6 +31,24 @@
 
 Con contenido estático en las emergentes (sin más commits tras el inicial), la ventana de carrera queda reducida al mínimo alcanzable desde el lado de la app. **El bug de fondo es del engine**: puede seguir reproduciéndose, por ejemplo, cerrando la ventana padre con emergentes recién creadas.
 
+## Segundo aborto: enumeración mutada al perder el foco (diálogos/sheets)
+
+Síntoma:
+```
+NSGenericException: *** Collection <__NSArrayM> was mutated while being enumerated.
+  -[FlutterWindowController windowDidResignKey:]
+  -[FlutterWindowOwner windowDidResignKey:]
+  ...
+  -[NSSheetMoveHelper openSheet]
+  -[NSWindow _beginWindowBlockingModalSessionForSheet:...]
+```
+
+Repro: tener un popup o tooltip abierto y abrir un diálogo (el modal se presenta como *sheet*; también aplica a cualquier ventana nueva que tome el foco). Al dejar de ser *key window* la principal, el embedder (`FlutterWindowController.windowDidResignKey:`) recorre su lista de ventanas emergentes para cerrarlas y la **muta durante la propia enumeración** → AppKit lanza `NSGenericException` y el proceso muere. Es un bug clásico de mutación-durante-enumeración en el código nuevo de popups del embedder de macOS (`FlutterWindowController.mm`).
+
+Mitigación en el demo: antes de crear cualquier diálogo (`DialogWindowController` o `showDialog`) **o ventana regular**, `_cerrarEmergentes()` destruye popup/tooltip, espera la confirmación de sus delegates (`Completer` por emergente, con timeout de 2 s) y deja un margen de ~80 ms para que AppKit estabilice la ventana clave. Así, cuando la principal pierde el foco, la lista de emergentes ya está vacía y no hay nada que enumerar.
+
+Límite de la mitigación: si el usuario cambia el foco por su cuenta (clic en otra ventana o en otra app) con emergentes abiertas, el mismo código del embedder se ejecuta y puede abortar; eso no es controlable desde la app.
+
 ## Si vuelve a ocurrir
 
 Anota la acción exacta y el intervalo (p. ej. "ocultar popup ~200 ms tras mostrarlo"), conserva el volcado y compáralo: si la traza pasa por `ResizeSynchronizer`/`viewDidUpdateContents`, es esta misma carrera. Tras un `fvm flutter upgrade` conviene reintentar: el área de windowing recibe fixes casi a diario en main.

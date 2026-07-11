@@ -6,6 +6,7 @@
 // ignore_for_file: invalid_use_of_internal_member
 // ignore_for_file: implementation_imports
 
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -130,6 +131,8 @@ class _PaginaPrincipalState extends State<PaginaPrincipal> {
   _FaseEmergente _fasePopup = _FaseEmergente.cerrado;
   WindowEntry? _tooltip;
   _FaseEmergente _faseTooltip = _FaseEmergente.cerrado;
+  Completer<void>? _popupDestruido;
+  Completer<void>? _tooltipDestruido;
   int _secuenciaRegulares = 0;
 
   /// Rectángulo global (en coordenadas de esta ventana) del widget con [key].
@@ -140,7 +143,13 @@ class _PaginaPrincipalState extends State<PaginaPrincipal> {
 
   // --------------------------- Ventana regular ----------------------------
 
-  void _crearVentanaRegular() {
+  Future<void> _crearVentanaRegular() async {
+    // La ventana nueva toma el foco: cerrar emergentes primero evita el
+    // aborto de enumeración del embedder (docs/popups-macos.md).
+    await _cerrarEmergentes();
+    if (!mounted) {
+      return;
+    }
     final WindowRegistry registro = WindowRegistry.of(context);
     final int numero = ++_secuenciaRegulares;
 
@@ -194,6 +203,11 @@ class _PaginaPrincipalState extends State<PaginaPrincipal> {
             _fasePopup = _FaseEmergente.cerrado;
           });
         }
+        final Completer<void>? avisado = _popupDestruido;
+        _popupDestruido = null;
+        if (avisado != null && !avisado.isCompleted) {
+          avisado.complete();
+        }
       }),
     );
     entrada = WindowEntry(
@@ -242,6 +256,11 @@ class _PaginaPrincipalState extends State<PaginaPrincipal> {
             _faseTooltip = _FaseEmergente.cerrado;
           });
         }
+        final Completer<void>? avisado = _tooltipDestruido;
+        _tooltipDestruido = null;
+        if (avisado != null && !avisado.isCompleted) {
+          avisado.complete();
+        }
       }),
     );
     entrada = WindowEntry(
@@ -281,9 +300,60 @@ class _PaginaPrincipalState extends State<PaginaPrincipal> {
     });
   }
 
+  /// Espera a que ninguna emergente siga en fase `abriendo`.
+  Future<void> _esperarAsentamiento() async {
+    int intentos = 0;
+    while ((_fasePopup == _FaseEmergente.abriendo ||
+            _faseTooltip == _FaseEmergente.abriendo) &&
+        intentos < 40) {
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      intentos += 1;
+    }
+  }
+
+  /// Cierra popup y tooltip (si los hay) y espera su destrucción confirmada.
+  /// En el canal main, si la principal deja de ser key window (p. ej. al
+  /// abrirse un diálogo/sheet o cualquier ventana nueva) con emergentes
+  /// abiertas, el embedder enumera y muta a la vez su lista de ventanas y
+  /// AppKit aborta ("Collection was mutated while being enumerated");
+  /// ver docs/popups-macos.md.
+  Future<void> _cerrarEmergentes() async {
+    await _esperarAsentamiento();
+    final List<Future<void>> pendientes = <Future<void>>[];
+    if (_popup != null) {
+      _popupDestruido ??= Completer<void>();
+      pendientes.add(_popupDestruido!.future);
+      if (_fasePopup == _FaseEmergente.abierto) {
+        setState(() => _fasePopup = _FaseEmergente.cerrando);
+        destruirSeguro(_popup!.controller);
+      }
+    }
+    if (_tooltip != null) {
+      _tooltipDestruido ??= Completer<void>();
+      pendientes.add(_tooltipDestruido!.future);
+      if (_faseTooltip == _FaseEmergente.abierto) {
+        setState(() => _faseTooltip = _FaseEmergente.cerrando);
+        destruirSeguro(_tooltip!.controller);
+      }
+    }
+    if (pendientes.isEmpty) {
+      return;
+    }
+    await Future.wait(pendientes)
+        .timeout(const Duration(seconds: 2), onTimeout: () => <void>[]);
+    // Margen para que AppKit estabilice la ventana clave antes de crear otra.
+    await Future<void>.delayed(const Duration(milliseconds: 80));
+  }
+
   // ------------------------------- Diálogos -------------------------------
 
-  void _crearDialogo({required bool modal}) {
+  Future<void> _crearDialogo({required bool modal}) async {
+    // El diálogo (sheet si es modal) roba el foco a la principal; con
+    // emergentes abiertas eso aborta en el embedder. Cerrarlas antes.
+    await _cerrarEmergentes();
+    if (!mounted) {
+      return;
+    }
     final WindowRegistry registro = WindowRegistry.of(context);
 
     late final WindowEntry entrada;
@@ -304,7 +374,11 @@ class _PaginaPrincipalState extends State<PaginaPrincipal> {
     registro.register(entrada);
   }
 
-  void _mostrarShowDialog() {
+  Future<void> _mostrarShowDialog() async {
+    await _cerrarEmergentes();
+    if (!mounted) {
+      return;
+    }
     // Con windowing activo, showDialog crea una ventana nativa hija
     // automáticamente: no hay que tocar nada del código Material clásico.
     showDialog<void>(

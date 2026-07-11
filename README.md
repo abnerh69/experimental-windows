@@ -67,6 +67,7 @@ Detalle de implementación: el contenido de ventanas secundarias se envuelve en 
 ## Bugs y limitaciones conocidos (macOS, canal main, mediados de 2026)
 
 - **Aborto del VM al alternar popups/tooltips** (`Callback invoked after it has been deleted`): carrera del engine entre `destroy()` y el redimensionado *sized-to-content* pendiente. El demo lo mitiga con una máquina de estados, periodo de asentamiento y destroy único; análisis completo en [`docs/popups-macos.md`](docs/popups-macos.md).
+- **Aborto de AppKit al abrir diálogos con emergentes abiertas** (`Collection was mutated while being enumerated` en `windowDidResignKey:`): al perder el foco la principal, el embedder cierra sus emergentes mutando la lista que enumera. El demo cierra popup/tooltip y espera su destrucción confirmada antes de crear diálogos o ventanas; mismo documento. Cambiar el foco manualmente (otra ventana u otra app) con emergentes abiertas puede seguir abortando: es del engine.
 
 - **Flash al crear ventanas regulares**: la ventana nativa aparece antes de que el contenido Flutter esté listo (fotogramas en negro, posición inicial incorrecta, reaparición). Issue [#184701](https://github.com/flutter/flutter/issues/184701).
 - **Hot reload / hot restart con varias ventanas**: históricamente dejaba ventanas sin respuesta en macOS (mitigado en gran parte por el fix de [#180287](https://github.com/flutter/flutter/pull/180287), incluido en 3.44). Si algo queda raro tras un restart, cierra las secundarias y vuelve a crearlas.
