@@ -39,6 +39,17 @@ Complementos:
 
 `kill <pid>` del proceso (el PID sale en los volcados) o detener la ejecución desde el IDE. Forzar salida (⌥⌘⎋) también funciona.
 
+## Cierre del diálogo fullscreen: aserciones `!_debugLocked` y `defunct`
+
+Con `fullscreenDialog: true` el diálogo-ventana **sí se muestra**, pero cada cierre produce dos aserciones de debug **no fatales** (aparecen como "Exception caught by widgets library / by gesture" y la app sigue funcionando):
+
+1. `'!_debugLocked': is not true` en `NavigatorState.dispose`. Cadena verificada en la traza: `pop → _flushHistoryUpdates → _DialogWindowRoute.didPop → controller.destroy() → _MacOSPlatformInterface._destroyWindow → PlatformDispatcher._drawFrame` — es decir, la ruta destruye la ventana **sincrónicamente dentro del pop**, con el Navigator aún bloqueado; ese destroy bombea un frame anidado cuyo `finalizeTree` desmonta el subárbol del diálogo, incluido el navigator interno (`_NavigatorShim`) cuyo `dispose` asserta.
+2. `'_lifecycleState != _ElementLifecycle.defunct'` en `setState`: al volver del pop real, el `pop` del shim continúa (`_afterNavigation → _cancelActivePointers → setState`) sobre su propio elemento, ya desmontado por el paso anterior.
+
+Corrección que correspondería upstream: diferir el `destroy()` de `_DialogWindowRoute.didPop` (microtask o post-frame) en lugar de ejecutarlo bajo el lock del Navigator.
+
+Mitigación en el demo: `_instalarFiltroDeAsercionesConocidas()` (activable con la constante `suprimirAsercionesConocidas` en `main.dart`) intercepta `FlutterError.onError` y reduce **solo esas dos firmas exactas** (texto + frame de pila) a una línea de log, delegando todo lo demás al manejador previo. Ponla en `false` para capturar las trazas íntegras al preparar el reporte.
+
 ## Estado upstream
 
-No encontramos issue con este síntoma exacto a la fecha; candidato a reporte en `flutter/flutter` citando la ruta `_DialogWindowRoute`/`sizedToContent` y el bloqueo por sesión modal de sheet. Revisar tras cada `fvm flutter upgrade`: la rama fullscreen demuestra que el resto de la tubería ya funciona.
+Verificado en pruebas locales (jul-2026): la ruta clásica funciona; el fullscreen se muestra pero asserta al cerrar; el sized-to-content sigue produciendo el sheet fantasma. No encontramos issues con estos síntomas exactos a la fecha; ambos son candidatos a reporte en `flutter/flutter` — el del sheet fantasma citando `_DialogWindowRoute`/`sizedToContent` y el bloqueo por sesión modal, y el de las aserciones citando el `destroy()` síncrono bajo el lock del Navigator. Revisar tras cada `fvm flutter upgrade`.

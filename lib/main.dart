@@ -35,8 +35,15 @@ void destruirSeguro(BaseWindowController controlador) {
 /// el cierre hasta que la ventana se asienta.
 enum _FaseEmergente { cerrado, abriendo, abierto, cerrando }
 
+/// Suprime las dos aserciones de debug conocidas al cerrar el diálogo-ventana
+/// fullscreen (docs/showdialog-macos.md). Cambiar a false para verlas íntegras.
+const bool suprimirAsercionesConocidas = true;
+
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  if (suprimirAsercionesConocidas) {
+    _instalarFiltroDeAsercionesConocidas();
+  }
   runWidget(
     RegularWindow(
       controller: RegularWindowController(
@@ -52,6 +59,34 @@ void main() {
       ),
     ),
   );
+}
+
+/// El framework (canal main) destruye la ventana del diálogo de forma
+/// síncrona dentro de `_DialogWindowRoute.didPop`, con el Navigator aún
+/// bloqueado (`_debugLocked`); eso bombea un frame anidado que desmonta el
+/// navigator interno del diálogo en pleno pop y dispara dos aserciones de
+/// debug NO fatales cada vez que se cierra el diálogo fullscreen. Este
+/// filtro las reduce a una línea de log y deja pasar todo lo demás intacto.
+void _instalarFiltroDeAsercionesConocidas() {
+  final FlutterExceptionHandler? previo = FlutterError.onError;
+  FlutterError.onError = (FlutterErrorDetails detalles) {
+    final String texto = detalles.exceptionAsString();
+    final String pila = detalles.stack?.toString() ?? '';
+    final bool bloqueoNavigator = texto.contains("'!_debugLocked'") &&
+        pila.contains('_DialogWindowRoute.didPop');
+    final bool elementoDifunto =
+        texto.contains('_ElementLifecycle.defunct') &&
+            pila.contains('NavigatorState._cancelActivePointers');
+    if (bloqueoNavigator || elementoDifunto) {
+      debugPrint(
+        '[windowing_demo] Aserción conocida suprimida al cerrar el '
+        'diálogo-ventana (docs/showdialog-macos.md): '
+        '${texto.split('\n').first}',
+      );
+      return;
+    }
+    previo?.call(detalles);
+  };
 }
 
 // ---------------------------------------------------------------------------
