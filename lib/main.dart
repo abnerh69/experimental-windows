@@ -15,6 +15,25 @@ import 'package:flutter/src/widgets/_window_positioner.dart';
 /// Estado compartido entre TODAS las ventanas: un solo engine, un solo isolate.
 final ValueNotifier<int> contadorCompartido = ValueNotifier<int>(0);
 
+/// Controladores cuya destrucción ya fue solicitada. Evita el doble destroy
+/// y da un único punto de salida; en el canal main, destruir de más puede
+/// abortar el VM (ver docs/popups-macos.md).
+final Set<BaseWindowController> _destruccionSolicitada =
+    <BaseWindowController>{};
+
+void destruirSeguro(BaseWindowController controlador) {
+  if (_destruccionSolicitada.add(controlador)) {
+    controlador.destroy();
+  }
+}
+
+/// Fases de una ventana emergente (popup/tooltip). Las emergentes se
+/// redimensionan a su contenido justo tras crearse; destruirlas con ese
+/// commit nativo pendiente dispara "Callback invoked after it has been
+/// deleted" en el engine (carrera destroy ↔ ResizeSynchronizer). Se bloquea
+/// el cierre hasta que la ventana se asienta.
+enum _FaseEmergente { cerrado, abriendo, abierto, cerrando }
+
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   runWidget(
@@ -107,8 +126,10 @@ class _PaginaPrincipalState extends State<PaginaPrincipal> {
   final GlobalKey _botonPopup = GlobalKey();
   final GlobalKey _botonTooltip = GlobalKey();
 
-  WindowEntry? _popupAbierto;
-  WindowEntry? _tooltipAbierto;
+  WindowEntry? _popup;
+  _FaseEmergente _fasePopup = _FaseEmergente.cerrado;
+  WindowEntry? _tooltip;
+  _FaseEmergente _faseTooltip = _FaseEmergente.cerrado;
   int _secuenciaRegulares = 0;
 
   /// Rectángulo global (en coordenadas de esta ventana) del widget con [key].
@@ -127,7 +148,10 @@ class _PaginaPrincipalState extends State<PaginaPrincipal> {
     final RegularWindowController controlador = RegularWindowController(
       size: const Size(480, 380),
       title: 'Ventana regular #$numero',
-      delegate: _AlDestruirRegular(() => registro.unregister(entrada)),
+      delegate: _AlDestruirRegular(() {
+        _destruccionSolicitada.remove(entrada.controller);
+        registro.unregister(entrada);
+      }),
     );
     entrada = WindowEntry(
       controller: controlador,
@@ -139,9 +163,16 @@ class _PaginaPrincipalState extends State<PaginaPrincipal> {
   // -------------------------------- Popup ---------------------------------
 
   void _alternarPopup() {
-    if (_popupAbierto != null) {
-      _popupAbierto!.controller.destroy(); // El delegate limpia el estado.
-      return;
+    switch (_fasePopup) {
+      case _FaseEmergente.abriendo:
+      case _FaseEmergente.cerrando:
+        return; // Transición en curso: ignorar el clic.
+      case _FaseEmergente.abierto:
+        setState(() => _fasePopup = _FaseEmergente.cerrando);
+        destruirSeguro(_popup!.controller); // El delegate limpia el estado.
+        return;
+      case _FaseEmergente.cerrado:
+        break;
     }
 
     final WindowRegistry registro = WindowRegistry.of(context);
@@ -155,9 +186,13 @@ class _PaginaPrincipalState extends State<PaginaPrincipal> {
         offset: Offset(0, 6),
       ),
       delegate: _AlDestruirPopup(() {
+        _destruccionSolicitada.remove(entrada.controller);
         registro.unregister(entrada);
         if (mounted) {
-          setState(() => _popupAbierto = null);
+          setState(() {
+            _popup = null;
+            _fasePopup = _FaseEmergente.cerrado;
+          });
         }
       }),
     );
@@ -166,15 +201,26 @@ class _PaginaPrincipalState extends State<PaginaPrincipal> {
       builder: (_) => const _ContenidoPopup(),
     );
     registro.register(entrada);
-    setState(() => _popupAbierto = entrada);
+    setState(() {
+      _popup = entrada;
+      _fasePopup = _FaseEmergente.abriendo;
+    });
+    _marcarAbiertoTrasAsentarse(entrada, esPopup: true);
   }
 
   // ------------------------------- Tooltip --------------------------------
 
   void _alternarTooltip() {
-    if (_tooltipAbierto != null) {
-      _tooltipAbierto!.controller.destroy();
-      return;
+    switch (_faseTooltip) {
+      case _FaseEmergente.abriendo:
+      case _FaseEmergente.cerrando:
+        return; // Transición en curso: ignorar el clic.
+      case _FaseEmergente.abierto:
+        setState(() => _faseTooltip = _FaseEmergente.cerrando);
+        destruirSeguro(_tooltip!.controller);
+        return;
+      case _FaseEmergente.cerrado:
+        break;
     }
 
     final WindowRegistry registro = WindowRegistry.of(context);
@@ -188,9 +234,13 @@ class _PaginaPrincipalState extends State<PaginaPrincipal> {
         offset: Offset(8, 0),
       ),
       delegate: _AlDestruirTooltip(() {
+        _destruccionSolicitada.remove(entrada.controller);
         registro.unregister(entrada);
         if (mounted) {
-          setState(() => _tooltipAbierto = null);
+          setState(() {
+            _tooltip = null;
+            _faseTooltip = _FaseEmergente.cerrado;
+          });
         }
       }),
     );
@@ -199,7 +249,36 @@ class _PaginaPrincipalState extends State<PaginaPrincipal> {
       builder: (_) => const _ContenidoTooltip(),
     );
     registro.register(entrada);
-    setState(() => _tooltipAbierto = entrada);
+    setState(() {
+      _tooltip = entrada;
+      _faseTooltip = _FaseEmergente.abriendo;
+    });
+    _marcarAbiertoTrasAsentarse(entrada, esPopup: false);
+  }
+
+  /// Pasa la emergente de `abriendo` a `abierto` cuando su redimensionado
+  /// inicial (sized-to-content) ya se asentó: un frame más un margen corto.
+  /// Mientras tanto el botón queda deshabilitado y no se permite destruir.
+  void _marcarAbiertoTrasAsentarse(WindowEntry entrada,
+      {required bool esPopup}) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      Future<void>.delayed(const Duration(milliseconds: 250), () {
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          if (esPopup &&
+              identical(_popup, entrada) &&
+              _fasePopup == _FaseEmergente.abriendo) {
+            _fasePopup = _FaseEmergente.abierto;
+          } else if (!esPopup &&
+              identical(_tooltip, entrada) &&
+              _faseTooltip == _FaseEmergente.abriendo) {
+            _faseTooltip = _FaseEmergente.abierto;
+          }
+        });
+      });
+    });
   }
 
   // ------------------------------- Diálogos -------------------------------
@@ -213,7 +292,10 @@ class _PaginaPrincipalState extends State<PaginaPrincipal> {
       title: modal ? 'Diálogo modal' : 'Diálogo sin padre (modeless)',
       // Con parent, la plataforma lo trata como modal de esa ventana.
       parent: modal ? WindowScope.of(context) : null,
-      delegate: _AlDestruirDialogo(() => registro.unregister(entrada)),
+      delegate: _AlDestruirDialogo(() {
+        _destruccionSolicitada.remove(entrada.controller);
+        registro.unregister(entrada);
+      }),
     );
     entrada = WindowEntry(
       controller: controlador,
@@ -272,19 +354,31 @@ class _PaginaPrincipalState extends State<PaginaPrincipal> {
                   FilledButton.tonalIcon(
                     key: _botonPopup,
                     icon: const Icon(Icons.menu_open),
-                    label: Text(_popupAbierto == null
-                        ? 'Mostrar popup'
-                        : 'Ocultar popup'),
-                    onPressed: _alternarPopup,
+                    label: Text(switch (_fasePopup) {
+                      _FaseEmergente.cerrado => 'Mostrar popup',
+                      _FaseEmergente.abriendo => 'Abriendo popup…',
+                      _FaseEmergente.abierto => 'Ocultar popup',
+                      _FaseEmergente.cerrando => 'Cerrando popup…',
+                    }),
+                    onPressed: _fasePopup == _FaseEmergente.cerrado ||
+                            _fasePopup == _FaseEmergente.abierto
+                        ? _alternarPopup
+                        : null,
                   ),
                   const SizedBox(height: 8),
                   FilledButton.tonalIcon(
                     key: _botonTooltip,
                     icon: const Icon(Icons.info_outline),
-                    label: Text(_tooltipAbierto == null
-                        ? 'Mostrar tooltip'
-                        : 'Ocultar tooltip'),
-                    onPressed: _alternarTooltip,
+                    label: Text(switch (_faseTooltip) {
+                      _FaseEmergente.cerrado => 'Mostrar tooltip',
+                      _FaseEmergente.abriendo => 'Abriendo tooltip…',
+                      _FaseEmergente.abierto => 'Ocultar tooltip',
+                      _FaseEmergente.cerrando => 'Cerrando tooltip…',
+                    }),
+                    onPressed: _faseTooltip == _FaseEmergente.cerrado ||
+                            _faseTooltip == _FaseEmergente.abierto
+                        ? _alternarTooltip
+                        : null,
                   ),
                   const SizedBox(height: 8),
                   OutlinedButton.icon(
@@ -394,7 +488,7 @@ class _ListaVentanas extends StatelessWidget {
                             trailing: IconButton(
                               icon: const Icon(Icons.close),
                               tooltip: 'Destruir',
-                              onPressed: e.controller.destroy,
+                              onPressed: () => destruirSeguro(e.controller),
                             ),
                           ),
                       ],
@@ -441,7 +535,7 @@ class ContenidoVentanaRegular extends StatelessWidget {
               ),
               const SizedBox(height: 24),
               OutlinedButton(
-                onPressed: ventana.destroy,
+                onPressed: () => destruirSeguro(ventana),
                 child: const Text('Cerrar esta ventana'),
               ),
             ],
@@ -486,7 +580,7 @@ class _ContenidoDialogo extends StatelessWidget {
                 Align(
                   alignment: Alignment.bottomRight,
                   child: FilledButton(
-                    onPressed: WindowScope.of(context).destroy,
+                    onPressed: () => destruirSeguro(WindowScope.of(context)),
                     child: const Text('Cerrar'),
                   ),
                 ),
@@ -523,7 +617,7 @@ class _ContenidoPopup extends StatelessWidget {
                     'posicionada con WindowPositioner.'),
                 const SizedBox(height: 12),
                 TextButton(
-                  onPressed: WindowScope.of(context).destroy,
+                  onPressed: () => destruirSeguro(WindowScope.of(context)),
                   child: const Text('Cerrar'),
                 ),
               ],
