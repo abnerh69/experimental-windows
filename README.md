@@ -64,6 +64,10 @@ Todo cuelga de un único engine y un único isolate (arquitectura *multi-view*),
 
 Detalle de implementación: el contenido de ventanas secundarias se envuelve en `Overlay.wrap` (con `alwaysSizeToContent: true` en popups/tooltips, que no reciben tamaño y se ajustan a su contenido), siguiendo el patrón del ejemplo oficial.
 
+## Documentación
+
+Guía práctica: [`docs/guia-supervivencia-windowing.md`](docs/guia-supervivencia-windowing.md) (cómo usar estas características sin morir en el intento). Informe técnico en inglés para reportes upstream: [`docs/field-report-windowing-macos.md`](docs/field-report-windowing-macos.md), con los cuatro bugs caracterizados, sus workarounds y los canales para apoyar el trabajo del equipo de escritorio liderado por Canonical.
+
 ## Bugs y limitaciones conocidos (macOS, canal main, mediados de 2026)
 
 - **`showDialog` como ventana crea un sheet invisible que bloquea la app** (sin botón rojo, `Quit` pita): la variante *sized-to-content* del diálogo no se presenta en macOS. El demo lo rescata en dos capas — vigilante nativo en el AppDelegate que termina el sheet (inmune al congelamiento de Dart) y sonda en Dart que cierra la ruta huérfana — más las variantes `fullscreen` (tamaño fijo: se muestra, con dos aserciones de debug no fatales al cerrar que el demo filtra) y clásica (`DialogRoute` manual, sin problemas); análisis en [`docs/showdialog-macos.md`](docs/showdialog-macos.md).
