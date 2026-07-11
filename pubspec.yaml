@@ -1,0 +1,19 @@
+name: windowing_demo
+description: Demo experimental de la API oficial de windowing de Flutter (canal main).
+publish_to: "none"
+version: 0.1.0
+
+environment:
+  sdk: ^3.11.0-0
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
