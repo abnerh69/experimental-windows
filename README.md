@@ -66,7 +66,7 @@ Detalle de implementación: el contenido de ventanas secundarias se envuelve en 
 
 ## Documentación
 
-Guía práctica: [`docs/guia-supervivencia-windowing.md`](docs/guia-supervivencia-windowing.md) (cómo usar estas características sin morir en el intento). Informe técnico en inglés para reportes upstream: [`docs/field-report-windowing-macos.md`](docs/field-report-windowing-macos.md), con los cuatro bugs caracterizados, sus workarounds y los canales para apoyar el trabajo del equipo de escritorio liderado por Canonical.
+Guía práctica: [`docs/guia-supervivencia-windowing.md`](docs/guia-supervivencia-windowing.md) (cómo usar estas características sin morir en el intento). Informe técnico en inglés para reportes upstream: [`docs/field-report-windowing-macos.md`](docs/field-report-windowing-macos.md), con los cuatro bugs caracterizados, sus workarounds y los canales para apoyar el trabajo del equipo de escritorio liderado por Canonical. Borradores listos para pegar (plantilla `02_bug.yml`) en [`docs/issues/`](docs/issues/).
 
 ## Bugs y limitaciones conocidos (macOS, canal main, mediados de 2026)
 
