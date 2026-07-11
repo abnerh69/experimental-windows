@@ -133,6 +133,7 @@ class _PaginaPrincipalState extends State<PaginaPrincipal> {
   _FaseEmergente _faseTooltip = _FaseEmergente.cerrado;
   Completer<void>? _popupDestruido;
   Completer<void>? _tooltipDestruido;
+  bool _dialogoMaterialRenderizado = false;
   int _secuenciaRegulares = 0;
 
   /// Rectángulo global (en coordenadas de esta ventana) del widget con [key].
@@ -374,28 +375,82 @@ class _PaginaPrincipalState extends State<PaginaPrincipal> {
     registro.register(entrada);
   }
 
-  Future<void> _mostrarShowDialog() async {
+  Future<void> _mostrarShowDialog({bool fullscreen = false}) async {
     await _cerrarEmergentes();
     if (!mounted) {
       return;
     }
-    // Con windowing activo, showDialog crea una ventana nativa hija
-    // automáticamente: no hay que tocar nada del código Material clásico.
-    showDialog<void>(
-      context: context,
-      builder: (BuildContext context) => AlertDialog(
-        title: const Text('showDialog de Material'),
-        content: const Text(
-          'Este diálogo usa el showDialog de siempre.\n\n'
-          'Con la bandera enable-windowing, Flutter lo renderiza en una '
-          'ventana nativa hija en lugar de una ruta superpuesta.',
-        ),
-        actions: <Widget>[
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cerrar'),
+    _dialogoMaterialRenderizado = false;
+    final NavigatorState navegador = Navigator.of(context);
+    // Watchdog: en macOS (canal main) la variante sized-to-content de la
+    // ventana-diálogo se crea invisible y bloquea la principal como sheet
+    // fantasma (docs/showdialog-macos.md). Si el contenido no confirma su
+    // primer frame en unos segundos, la ruta se cierra sola.
+    Timer(const Duration(seconds: 6), () {
+      if (_dialogoMaterialRenderizado || !navegador.mounted) {
+        return;
+      }
+      if (navegador.canPop()) {
+        navegador.pop();
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'La ventana-diálogo de showDialog nunca llegó a mostrarse '
+              '(bug de macOS en el canal main); se canceló automáticamente.',
+            ),
           ),
-        ],
+        );
+      }
+    });
+    // Con windowing activo, showDialog crea una ventana nativa hija.
+    // Con fullscreen la rama usa tamaño fijo (el de la principal) y sí
+    // funciona hoy en macOS; sin él usa sized-to-content, que no.
+    await showDialog<void>(
+      context: context,
+      fullscreenDialog: fullscreen,
+      builder: (BuildContext context) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _dialogoMaterialRenderizado = true;
+        });
+        return AlertDialog(
+          title: const Text('showDialog de Material'),
+          content: const Text(
+            'Este diálogo usa el showDialog de siempre.\n\n'
+            'Con la bandera enable-windowing, Flutter lo renderiza en una '
+            'ventana nativa hija en lugar de una ruta superpuesta.',
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cerrar'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _mostrarDialogoRutaClasica() {
+    // Empuja DialogRoute directamente: esquiva la rama de windowing de
+    // showRawDialog y muestra el diálogo clásico dentro de esta ventana.
+    Navigator.of(context).push(
+      DialogRoute<void>(
+        context: context,
+        builder: (BuildContext context) => AlertDialog(
+          title: const Text('Diálogo clásico (misma ventana)'),
+          content: const Text(
+            'DialogRoute empujada a mano: sin ventana nativa, con barrera '
+            'superpuesta, como en el canal stable.',
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cerrar'),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -469,8 +524,22 @@ class _PaginaPrincipalState extends State<PaginaPrincipal> {
                   const SizedBox(height: 8),
                   OutlinedButton.icon(
                     icon: const Icon(Icons.chat_bubble_outline),
-                    label: const Text('showDialog de Material'),
+                    label: const Text(
+                        'showDialog (ventana sized-to-content · bug)'),
                     onPressed: _mostrarShowDialog,
+                  ),
+                  const SizedBox(height: 8),
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.open_in_full),
+                    label: const Text(
+                        'showDialog fullscreen (ventana, tamaño fijo)'),
+                    onPressed: () => _mostrarShowDialog(fullscreen: true),
+                  ),
+                  const SizedBox(height: 8),
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.chat_bubble),
+                    label: const Text('showDialog clásico (misma ventana)'),
+                    onPressed: _mostrarDialogoRutaClasica,
                   ),
                   const SizedBox(height: 24),
                   const _TarjetaContador(),
